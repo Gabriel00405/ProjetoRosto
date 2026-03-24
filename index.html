@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Análise Facial - Série Temporal</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto; }
+        video { width: 100%; border: 2px solid #ccc; border-radius: 8px; margin-top: 10px; }
+        button { padding: 10px 20px; font-size: 16px; margin-top: 10px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 5px;}
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        #status { margin-top: 10px; font-weight: bold; color: #d9534f; }
+        #logErro { font-size: 12px; color: red; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+    <h2>Extrator de Movimento Facial</h2>
+    <p>1. Aguarde a IA carregar.<br>2. Envie um vídeo do rosto.<br>3. O CSV será baixado automaticamente no final.</p>
+
+    <input type="file" id="videoUpload" accept="video/mp4,video/x-m4v,video/*" disabled>
+    <div id="status">Carregando modelo de IA (MediaPipe)... aguarde.</div>
+    <div id="logErro"></div>
+    
+    <video id="videoElement" controls playsinline></video>
+    <button id="btnDownload" style="display: none;">Baixar CSV (Série Temporal)</button>
+
+    <script type="module">
+        
+        import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js";
+
+        const videoUpload = document.getElementById('videoUpload');
+        const video = document.getElementById('videoElement');
+        const statusText = document.getElementById('status');
+        const logErro = document.getElementById('logErro');
+        const btnDownload = document.getElementById('btnDownload');
+
+        let faceLandmarker;
+        let serieTemporal = []; 
+        let processando = false;
+
+        async function carregarModelo() {
+            try {
+                statusText.innerText = "Baixando arquivos da IA... (pode levar alguns segundos)";
+                
+                const vision = await FilesetResolver.forVisionTasks(
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+                );
+                
+                faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+                        delegate: "CPU"
+                    },
+                    outputFaceBlendshapes: false,
+                    runningMode: "VIDEO",
+                    numFaces: 1
+                });
+                
+                statusText.innerText = "IA Carregada com Sucesso! Pode enviar seu vídeo.";
+                statusText.style.color = "green";
+                videoUpload.disabled = false;
+                logErro.innerText = ""; 
+                
+            } catch (erro) {
+                console.error("Erro:", erro);
+                statusText.innerText = "Falha ao carregar a IA.";
+                logErro.innerText = "Erro: " + erro.message;
+            }
+        }
+        carregarModelo();
+
+        videoUpload.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            const url = URL.createObjectURL(file);
+            video.src = url;
+            serieTemporal = []; 
+            btnDownload.style.display = "none";
+            statusText.innerText = "Vídeo carregado. Dê play no vídeo para processar.";
+            statusText.style.color = "blue";
+        });
+
+        video.addEventListener('play', () => {
+            processando = true;
+            statusText.innerText = "Extraindo série temporal... aguarde o vídeo terminar.";
+            statusText.style.color = "#d9534f";
+            processarFrame();
+        });
+
+        video.addEventListener('pause', () => { processando = false; });
+        video.addEventListener('ended', () => { 
+            processando = false; 
+            statusText.innerText = "Processamento concluído!";
+            statusText.style.color = "green";
+            btnDownload.style.display = "block"; 
+        });
+
+        async function processarFrame() {
+            if (!processando) return;
+
+            const tempoAtualMs = video.currentTime * 1000;
+            const resultados = faceLandmarker.detectForVideo(video, tempoAtualMs);
+
+            if (resultados.faceLandmarks && resultados.faceLandmarks.length > 0) {
+                const marcos = resultados.faceLandmarks[0];
+                serieTemporal.push({
+                    tempo_segundos: video.currentTime.toFixed(3),
+                    nariz_y: marcos[1].y.toFixed(5),
+                    labio_sup_y: marcos[13].y.toFixed(5),
+                    labio_inf_y: marcos[14].y.toFixed(5)
+                });
+            }
+            video.requestVideoFrameCallback(processarFrame);
+        }
+
+        btnDownload.addEventListener('click', () => {
+            if (serieTemporal.length === 0) return alert("Nenhum dado coletado!");
+
+            let csvContent = "Tempo(s),Nariz_Y,Labio_Superior_Y,Labio_Inferior_Y\n";
+            serieTemporal.forEach(linha => {
+                csvContent += `${linha.tempo_segundos},${linha.nariz_y},${linha.labio_sup_y},${linha.labio_inf_y}\n`;
+            });
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", "movimento_facial.csv");
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        });
+    </script>
+</body>
+</html>
