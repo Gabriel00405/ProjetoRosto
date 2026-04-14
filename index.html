@@ -3,44 +3,98 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Análise Facial - Série Temporal</title>
+    <title>Scanner Facial Mobile + Gráfico</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
     <style>
-        body { font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto; }
-        video { width: 100%; border: 2px solid #ccc; border-radius: 8px; margin-top: 10px; }
-        button { padding: 10px 20px; font-size: 16px; margin-top: 10px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 5px;}
+        body { font-family: Arial, sans-serif; padding: 15px; max-width: 600px; margin: auto; text-align: center; background-color: #f4f4f9; }
+        
+        .video-container {
+            position: relative; width: 100%; max-width: 400px; margin: 10px auto;
+            border: 3px solid #333; border-radius: 12px; overflow: hidden;
+            background-color: #000; aspect-ratio: 3/4;
+        }
+        
+        video, canvas { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: block; }
+        canvas { position: absolute; top: 0; left: 0; pointer-events: none; }
+
+        .botoes-container { display: flex; flex-direction: column; gap: 10px; margin-top: 15px; }
+        button { padding: 15px; font-size: 16px; font-weight: bold; cursor: pointer; color: white; border: none; border-radius: 8px;}
         button:disabled { background: #ccc; cursor: not-allowed; }
+        
+        #btnStartCamera { background: #007bff; }
+        #btnToggleMask { background: #6f42c1; display: none; } /* Botão roxo para a máscara */
+        #btnRecord { background: #28a745; display: none; }
+        #btnStop { background: #d9534f; display: none; }
+        #btnDownloadCSV { background: #6c757d; display: none; margin-top: 10px; }
+        
         #status { margin-top: 10px; font-weight: bold; color: #d9534f; }
-        #contador { font-size: 18px; color: #28a745; font-weight: bold; margin-top: 5px; display: none; }
+        #contador { font-size: 16px; color: #28a745; font-weight: bold; margin-top: 5px; display: none; }
+        
+        .chart-container {
+            width: 100%; max-width: 400px; margin: 20px auto;
+            background: white; padding: 10px; border-radius: 8px;
+            box-shadow: 0px 4px 6px rgba(0,0,0,0.1);
+            display: none; 
+        }
     </style>
 </head>
 <body>
 
-    <h2>Extrator de Movimento Facial</h2>
-    <p>1. Aguarde a IA carregar.<br>2. Envie um vídeo do rosto.<br>3. O CSV será baixado automaticamente no final.</p>
-
-    <input type="file" id="videoUpload" accept="video/mp4,video/x-m4v,video/*" disabled>
-    <div id="status">Carregando modelo de IA (MediaPipe)... aguarde.</div>
-    <div id="logErro"></div>
+    <h2>Análise Facial ao Vivo</h2>
     
-    <video id="videoElement" controls playsinline></video>
-    <button id="btnDownload" style="display: none;">Baixar CSV (Série Temporal)</button>
+    <div id="status">Carregando IA...</div>
+    <div id="contador">Frames: 0</div>
+    
+    <div class="video-container">
+        <video id="videoElement" autoplay playsinline></video>
+        <canvas id="canvasElement"></canvas>
+    </div>
+
+    <div class="botoes-container">
+        <button id="btnStartCamera" disabled>Ligar Câmera</button>
+        <button id="btnToggleMask">👁️ Ocultar Máscara</button>
+        <button id="btnRecord">🔴 Iniciar Gravação</button>
+        <button id="btnStop">⏹ Parar e Ver Resultado</button>
+    </div>
+
+    <div class="chart-container" id="chartContainer">
+        <canvas id="meuGrafico"></canvas>
+        <button id="btnDownloadCSV" style="width: 100%;">Baixar CSV Completo (Backup)</button>
+    </div>
 
     <script type="module">
-        
-        import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js";
+        import { FaceLandmarker, FilesetResolver, DrawingUtils } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js";
 
-        const videoUpload = document.getElementById('videoUpload');
         const video = document.getElementById('videoElement');
         const canvas = document.getElementById('canvasElement');
         const canvasCtx = canvas.getContext('2d');
         const statusText = document.getElementById('status');
-        const logErro = document.getElementById('logErro');
-        const btnDownload = document.getElementById('btnDownload');
+        const contadorText = document.getElementById('contador');
+        
+        const btnStartCamera = document.getElementById('btnStartCamera');
+        const btnToggleMask = document.getElementById('btnToggleMask');
+        const btnRecord = document.getElementById('btnRecord');
+        const btnStop = document.getElementById('btnStop');
+        const btnDownloadCSV = document.getElementById('btnDownloadCSV');
+        const chartContainer = document.getElementById('chartContainer');
 
         let faceLandmarker;
         let drawingUtils;
         let serieTemporal = []; 
-        let processando = false;
+        let isCameraAtiva = false;
+        let isGravando = false;
+        let mostrarMascara = true; // Controle da máscara
+        let lastVideoTime = -1;
+        let tempoInicioGravacao = 0;
+        let meuGrafico = null; 
+
+        // Controle do botão de máscara
+        btnToggleMask.addEventListener('click', () => {
+            mostrarMascara = !mostrarMascara;
+            btnToggleMask.innerText = mostrarMascara ? "👁️ Ocultar Máscara" : "👁️ Mostrar Máscara";
+        });
 
         // 1. Inicializa a IA
         async function carregarModelo() {
@@ -52,71 +106,157 @@
                         delegate: "CPU"
                     },
                     outputFaceBlendshapes: false,
-                    runningMode: "VIDEO", // Usamos modo de vídeo para processar os frames da câmera
+                    runningMode: "VIDEO",
                     numFaces: 1
                 });
                 
-                statusText.innerText = "IA Carregada com Sucesso! Pode enviar seu vídeo.";
+                drawingUtils = new DrawingUtils(canvasCtx);
+                statusText.innerText = "IA Pronta!";
                 statusText.style.color = "green";
-                videoUpload.disabled = false;
-                logErro.innerText = ""; 
-                
+                btnStartCamera.disabled = false;
             } catch (erro) {
-                console.error("Erro:", erro);
-                statusText.innerText = "Falha ao carregar a IA.";
-                logErro.innerText = "Erro: " + erro.message;
+                statusText.innerText = "Erro na IA: " + erro.message;
             }
         }
         carregarModelo();
 
-        videoUpload.addEventListener('change', (event) => {
-            const file = event.target.files[0];
-            if (!file) return;
-            const url = URL.createObjectURL(file);
-            video.src = url;
-            serieTemporal = []; 
-            btnDownload.style.display = "none";
-            statusText.innerText = "Vídeo carregado. Dê play no vídeo para processar.";
-            statusText.style.color = "blue";
+        // 2. Ligar a Câmera
+        btnStartCamera.addEventListener('click', async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } } 
+            });
+            video.srcObject = stream;
+            isCameraAtiva = true;
+            
+            video.addEventListener("loadeddata", () => {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                btnStartCamera.style.display = "none";
+                btnToggleMask.style.display = "block"; // Revela o botão da máscara
+                btnRecord.style.display = "block";
+                statusText.innerText = "Câmera Ativa. Posicione o rosto e grave.";
+                processarCamera();
+            });
         });
 
-        video.addEventListener('play', () => {
-            processando = true;
-            statusText.innerText = "Extraindo série temporal... aguarde o vídeo terminar.";
-            statusText.style.color = "#d9534f";
-            processarFrame();
-        });
+        // 3. Loop contínuo da Câmera
+        function processarCamera() {
+            if (!isCameraAtiva) return;
 
-        video.addEventListener('pause', () => { processando = false; });
-        video.addEventListener('ended', () => { 
-            processando = false; 
-            statusText.innerText = "Processamento concluído!";
-            statusText.style.color = "green";
-            btnDownload.style.display = "block"; 
-        });
+            let startTimeMs = performance.now();
+            if (lastVideoTime !== video.currentTime) {
+                lastVideoTime = video.currentTime;
+                const resultados = faceLandmarker.detectForVideo(video, startTimeMs);
 
-        async function processarFrame() {
-            if (!processando) return;
+                canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
 
-            const tempoAtualMs = video.currentTime * 1000;
-            const resultados = faceLandmarker.detectForVideo(video, tempoAtualMs);
+                if (resultados.faceLandmarks && resultados.faceLandmarks.length > 0) {
+                    const marcos = resultados.faceLandmarks[0];
 
-            if (resultados.faceLandmarks && resultados.faceLandmarks.length > 0) {
-                const marcos = resultados.faceLandmarks[0];
-                serieTemporal.push({
-                    tempo_segundos: video.currentTime.toFixed(3),
-                    nariz_y: marcos[1].y.toFixed(5),
-                    labio_sup_y: marcos[13].y.toFixed(5),
-                    labio_inf_y: marcos[14].y.toFixed(5)
-                });
+                    // Desenha a máscara APENAS se a variável for true
+                    if (mostrarMascara) {
+                        drawingUtils.drawConnectors(marcos, FaceLandmarker.FACE_LANDMARKS_TESSELATION, { color: "#C0C0C070", lineWidth: 1 });
+                        drawingUtils.drawConnectors(marcos, FaceLandmarker.FACE_LANDMARKS_LIPS, { color: "#30FF30", lineWidth: 2 }); 
+                    }
+
+                    if (isGravando) {
+                        let tempoAtual = (performance.now() - tempoInicioGravacao) / 1000;
+                        
+                        let coordenadasDoFrame = [];
+                        for (let i = 0; i < 468; i++) {
+                            coordenadasDoFrame.push(marcos[i].x.toFixed(5));
+                            coordenadasDoFrame.push(marcos[i].y.toFixed(5));
+                            coordenadasDoFrame.push(marcos[i].z.toFixed(5));
+                        }
+
+                        let aberturaBoca = Math.abs(marcos[14].y - marcos[13].y);
+
+                        serieTemporal.push({
+                            tempo_segundos: tempoAtual.toFixed(3),
+                            dados: coordenadasDoFrame,
+                            abertura: aberturaBoca
+                        });
+
+                        contadorText.innerText = `Gravando... ${serieTemporal.length} frames`;
+                    }
+                }
             }
-            video.requestVideoFrameCallback(processarFrame);
+            window.requestAnimationFrame(processarCamera);
         }
 
-        btnDownload.addEventListener('click', () => {
-            if (serieTemporal.length === 0) return alert("Nenhum dado coletado!");
+        // 4. Iniciar Gravação
+        btnRecord.addEventListener('click', () => {
+            serieTemporal = []; 
+            isGravando = true;
+            tempoInicioGravacao = performance.now();
+            chartContainer.style.display = "none"; 
+            btnRecord.style.display = "none";
+            btnStop.style.display = "block";
+            contadorText.style.display = "block";
+            statusText.innerText = "Gravando Movimentos...";
+            statusText.style.color = "red";
+        });
 
-            let csvContent = "Tempo(s),Nariz_Y,Labio_Superior_Y,Labio_Inferior_Y\n";
+        // 5. Parar Gravação e GERAR GRÁFICO
+        btnStop.addEventListener('click', () => {
+            isGravando = false;
+            btnStop.style.display = "none";
+            btnRecord.style.display = "block";
+            btnRecord.innerText = "🔄 Gravar Novamente";
+            statusText.innerText = "Análise Pronta!";
+            statusText.style.color = "green";
+            
+            if (serieTemporal.length === 0) return alert("Nenhum rosto detectado!");
+
+            gerarGrafico();
+            chartContainer.style.display = "block";
+            btnDownloadCSV.style.display = "block";
+        });
+
+        // ==========================================
+        // LÓGICA DO GRÁFICO (CHART.JS)
+        // ==========================================
+        function gerarGrafico() {
+            const ctx = document.getElementById('meuGrafico').getContext('2d');
+            
+            const labelsTempo = serieTemporal.map(item => item.tempo_segundos);
+            const dadosAbertura = serieTemporal.map(item => item.abertura);
+
+            if (meuGrafico) meuGrafico.destroy();
+
+            meuGrafico = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labelsTempo,
+                    datasets: [{
+                        label: 'Abertura da Boca (Eixo Y)',
+                        data: dadosAbertura,
+                        borderColor: '#007bff',
+                        backgroundColor: 'rgba(0, 123, 255, 0.2)',
+                        borderWidth: 2,
+                        pointRadius: 0, 
+                        fill: true,
+                        tension: 0.4 
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        x: { title: { display: true, text: 'Tempo (s)' } },
+                        y: { title: { display: true, text: 'Distância' }, beginAtZero: true }
+                    }
+                }
+            });
+        }
+
+        // 6. Download CSV
+        btnDownloadCSV.addEventListener('click', () => {
+            let csvContent = "Tempo_Decorrido(s)";
+            for (let i = 0; i < 468; i++) {
+                csvContent += `,Pt${i}_X,Pt${i}_Y,Pt${i}_Z`;
+            }
+            csvContent += "\n";
+
             serieTemporal.forEach(linha => {
                 csvContent += `${linha.tempo_segundos},${linha.dados.join(',')}\n`;
             });
@@ -125,7 +265,7 @@
             const link = document.createElement("a");
             const url = URL.createObjectURL(blob);
             link.setAttribute("href", url);
-            link.setAttribute("download", "movimento_facial.csv");
+            link.setAttribute("download", `analise_facial.csv`);
             link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();
