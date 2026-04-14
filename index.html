@@ -16,15 +16,16 @@
             background-color: #000; aspect-ratio: 3/4;
         }
         
-        video, canvas { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: block; }
-        canvas { position: absolute; top: 0; left: 0; pointer-events: none; }
+        /* Regras APENAS para a câmera e a máscara */
+        #videoElement, #canvasElement { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: block; }
+        #canvasElement { position: absolute; top: 0; left: 0; pointer-events: none; }
 
         .botoes-container { display: flex; flex-direction: column; gap: 10px; margin-top: 15px; }
         button { padding: 15px; font-size: 16px; font-weight: bold; cursor: pointer; color: white; border: none; border-radius: 8px;}
         button:disabled { background: #ccc; cursor: not-allowed; }
         
         #btnStartCamera { background: #007bff; }
-        #btnToggleMask { background: #6f42c1; display: none; } /* Botão roxo para a máscara */
+        #btnToggleMask { background: #6f42c1; display: none; } 
         #btnRecord { background: #28a745; display: none; }
         #btnStop { background: #d9534f; display: none; }
         #btnDownloadCSV { background: #6c757d; display: none; margin-top: 10px; }
@@ -32,12 +33,16 @@
         #status { margin-top: 10px; font-weight: bold; color: #d9534f; }
         #contador { font-size: 16px; color: #28a745; font-weight: bold; margin-top: 5px; display: none; }
         
+        /* Container do Gráfico arrumado */
         .chart-container {
-            width: 100%; max-width: 400px; margin: 20px auto;
-            background: white; padding: 10px; border-radius: 8px;
-            box-shadow: 0px 4px 6px rgba(0,0,0,0.1);
-            display: none; 
+            width: 100%; max-width: 400px; margin: 20px auto 40px auto;
+            background: white; padding: 15px; border-radius: 12px;
+            box-shadow: 0px 4px 10px rgba(0,0,0,0.1);
+            display: none; /* Escondido até terminar a gravação */
         }
+        
+        /* Regra específica para o gráfico não quebrar */
+        #meuGrafico { width: 100% !important; height: auto !important; display: block; }
     </style>
 </head>
 <body>
@@ -56,12 +61,13 @@
         <button id="btnStartCamera" disabled>Ligar Câmera</button>
         <button id="btnToggleMask">👁️ Ocultar Máscara</button>
         <button id="btnRecord">🔴 Iniciar Gravação</button>
-        <button id="btnStop">⏹ Parar e Ver Resultado</button>
+        <button id="btnStop">⏹ Parar e Ver Gráfico</button>
     </div>
 
     <div class="chart-container" id="chartContainer">
+        <h3 style="margin-top: 0; color: #333; font-size: 16px;">Série Temporal: Abertura da Boca</h3>
         <canvas id="meuGrafico"></canvas>
-        <button id="btnDownloadCSV" style="width: 100%;">Baixar CSV Completo (Backup)</button>
+        <button id="btnDownloadCSV" style="width: 100%;">Baixar CSV (Backup)</button>
     </div>
 
     <script type="module">
@@ -85,7 +91,7 @@
         let serieTemporal = []; 
         let isCameraAtiva = false;
         let isGravando = false;
-        let mostrarMascara = true; // Controle da máscara
+        let mostrarMascara = true; 
         let lastVideoTime = -1;
         let tempoInicioGravacao = 0;
         let meuGrafico = null; 
@@ -132,7 +138,7 @@
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
                 btnStartCamera.style.display = "none";
-                btnToggleMask.style.display = "block"; // Revela o botão da máscara
+                btnToggleMask.style.display = "block"; 
                 btnRecord.style.display = "block";
                 statusText.innerText = "Câmera Ativa. Posicione o rosto e grave.";
                 processarCamera();
@@ -153,7 +159,6 @@
                 if (resultados.faceLandmarks && resultados.faceLandmarks.length > 0) {
                     const marcos = resultados.faceLandmarks[0];
 
-                    // Desenha a máscara APENAS se a variável for true
                     if (mostrarMascara) {
                         drawingUtils.drawConnectors(marcos, FaceLandmarker.FACE_LANDMARKS_TESSELATION, { color: "#C0C0C070", lineWidth: 1 });
                         drawingUtils.drawConnectors(marcos, FaceLandmarker.FACE_LANDMARKS_LIPS, { color: "#30FF30", lineWidth: 2 }); 
@@ -203,7 +208,7 @@
             btnStop.style.display = "none";
             btnRecord.style.display = "block";
             btnRecord.innerText = "🔄 Gravar Novamente";
-            statusText.innerText = "Análise Pronta!";
+            statusText.innerText = "Análise Pronta! Veja o gráfico abaixo.";
             statusText.style.color = "green";
             
             if (serieTemporal.length === 0) return alert("Nenhum rosto detectado!");
@@ -211,6 +216,11 @@
             gerarGrafico();
             chartContainer.style.display = "block";
             btnDownloadCSV.style.display = "block";
+            
+            // Rolar a tela para baixo automaticamente para ver o gráfico
+            setTimeout(() => {
+                chartContainer.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            }, 300);
         });
 
         // ==========================================
@@ -229,7 +239,7 @@
                 data: {
                     labels: labelsTempo,
                     datasets: [{
-                        label: 'Abertura da Boca (Eixo Y)',
+                        label: 'Distância',
                         data: dadosAbertura,
                         borderColor: '#007bff',
                         backgroundColor: 'rgba(0, 123, 255, 0.2)',
@@ -243,7 +253,7 @@
                     responsive: true,
                     scales: {
                         x: { title: { display: true, text: 'Tempo (s)' } },
-                        y: { title: { display: true, text: 'Distância' }, beginAtZero: true }
+                        y: { title: { display: true, text: 'Distância (normalizada)' }, beginAtZero: true }
                     }
                 }
             });
