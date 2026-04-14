@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Scanner Facial Mobile + Gráfico</title>
+    <title>Scanner Facial Mobile Pro</title>
     
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
@@ -16,7 +16,6 @@
             background-color: #000; aspect-ratio: 3/4;
         }
         
-        /* Regras APENAS para a câmera e a máscara */
         #videoElement, #canvasElement { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: block; }
         #canvasElement { position: absolute; top: 0; left: 0; pointer-events: none; }
 
@@ -28,20 +27,24 @@
         #btnToggleMask { background: #6f42c1; display: none; } 
         #btnRecord { background: #28a745; display: none; }
         #btnStop { background: #d9534f; display: none; }
-        #btnDownloadCSV { background: #6c757d; display: none; margin-top: 10px; }
+        #btnDownloadCSV { background: #6c757d; margin-top: 15px; }
         
         #status { margin-top: 10px; font-weight: bold; color: #d9534f; }
         #contador { font-size: 16px; color: #28a745; font-weight: bold; margin-top: 5px; display: none; }
         
-        /* Container do Gráfico arrumado */
+        /* Estilos do Container do Gráfico e Seletor */
         .chart-container {
             width: 100%; max-width: 400px; margin: 20px auto 40px auto;
             background: white; padding: 15px; border-radius: 12px;
             box-shadow: 0px 4px 10px rgba(0,0,0,0.1);
             display: none; /* Escondido até terminar a gravação */
+            box-sizing: border-box;
         }
         
-        /* Regra específica para o gráfico não quebrar */
+        .seletor-box { margin-bottom: 15px; text-align: left; }
+        .seletor-box label { font-size: 14px; font-weight: bold; color: #333; display: block; margin-bottom: 5px; }
+        select { width: 100%; padding: 10px; font-size: 16px; border-radius: 6px; border: 1px solid #ccc; }
+        
         #meuGrafico { width: 100% !important; height: auto !important; display: block; }
     </style>
 </head>
@@ -61,13 +64,23 @@
         <button id="btnStartCamera" disabled>Ligar Câmera</button>
         <button id="btnToggleMask">👁️ Ocultar Máscara</button>
         <button id="btnRecord">🔴 Iniciar Gravação</button>
-        <button id="btnStop">⏹ Parar e Ver Gráfico</button>
+        <button id="btnStop">⏹ Parar e Ver Resultados</button>
     </div>
 
     <div class="chart-container" id="chartContainer">
-        <h3 style="margin-top: 0; color: #333; font-size: 16px;">Série Temporal: Abertura da Boca</h3>
+        
+        <div class="seletor-box">
+            <label for="seletorMetrica">Visualizar movimento de:</label>
+            <select id="seletorMetrica">
+                <option value="boca">Abertura da Boca</option>
+                <option value="olho_esq">Piscar - Olho Esquerdo</option>
+                <option value="olho_dir">Piscar - Olho Direito</option>
+                <option value="sobrancelha">Elevação - Sobrancelha Esq.</option>
+            </select>
+        </div>
+
         <canvas id="meuGrafico"></canvas>
-        <button id="btnDownloadCSV" style="width: 100%;">Baixar CSV (Backup)</button>
+        <button id="btnDownloadCSV" style="width: 100%;">Baixar CSV (Todos os 468 Pontos)</button>
     </div>
 
     <script type="module">
@@ -84,7 +97,9 @@
         const btnRecord = document.getElementById('btnRecord');
         const btnStop = document.getElementById('btnStop');
         const btnDownloadCSV = document.getElementById('btnDownloadCSV');
+        
         const chartContainer = document.getElementById('chartContainer');
+        const seletorMetrica = document.getElementById('seletorMetrica');
 
         let faceLandmarker;
         let drawingUtils;
@@ -96,7 +111,11 @@
         let tempoInicioGravacao = 0;
         let meuGrafico = null; 
 
-        // Controle do botão de máscara
+        // 0. Atualizar o gráfico se o usuário mudar o menu suspendo
+        seletorMetrica.addEventListener('change', () => {
+            if (serieTemporal.length > 0) gerarGrafico();
+        });
+
         btnToggleMask.addEventListener('click', () => {
             mostrarMascara = !mostrarMascara;
             btnToggleMask.innerText = mostrarMascara ? "👁️ Ocultar Máscara" : "👁️ Mostrar Máscara";
@@ -161,12 +180,12 @@
 
                     if (mostrarMascara) {
                         drawingUtils.drawConnectors(marcos, FaceLandmarker.FACE_LANDMARKS_TESSELATION, { color: "#C0C0C070", lineWidth: 1 });
-                        drawingUtils.drawConnectors(marcos, FaceLandmarker.FACE_LANDMARKS_LIPS, { color: "#30FF30", lineWidth: 2 }); 
                     }
 
                     if (isGravando) {
                         let tempoAtual = (performance.now() - tempoInicioGravacao) / 1000;
                         
+                        // Preparando os 468 pontos completos para o CSV
                         let coordenadasDoFrame = [];
                         for (let i = 0; i < 468; i++) {
                             coordenadasDoFrame.push(marcos[i].x.toFixed(5));
@@ -174,12 +193,20 @@
                             coordenadasDoFrame.push(marcos[i].z.toFixed(5));
                         }
 
-                        let aberturaBoca = Math.abs(marcos[14].y - marcos[13].y);
+                        // Calculando as 4 métricas específicas em tempo real
+                        let metricaBoca = Math.abs(marcos[14].y - marcos[13].y); // Distância vertical boca
+                        let metricaOlhoEsq = Math.abs(marcos[159].y - marcos[145].y); // Distância vertical olho esq
+                        let metricaOlhoDir = Math.abs(marcos[386].y - marcos[374].y); // Distância vertical olho dir
+                        let metricaSobrancelha = Math.abs(marcos[70].y - marcos[159].y); // Distância sobrancelha pro olho
 
+                        // Salvamos TUDO no nosso "banco de dados" temporário
                         serieTemporal.push({
                             tempo_segundos: tempoAtual.toFixed(3),
-                            dados: coordenadasDoFrame,
-                            abertura: aberturaBoca
+                            dadosCSV: coordenadasDoFrame,
+                            boca: metricaBoca,
+                            olho_esq: metricaOlhoEsq,
+                            olho_dir: metricaOlhoDir,
+                            sobrancelha: metricaSobrancelha
                         });
 
                         contadorText.innerText = `Gravando... ${serieTemporal.length} frames`;
@@ -207,42 +234,51 @@
             isGravando = false;
             btnStop.style.display = "none";
             btnRecord.style.display = "block";
-            btnRecord.innerText = "🔄 Gravar Novamente";
-            statusText.innerText = "Análise Pronta! Veja o gráfico abaixo.";
+            btnRecord.innerText = "🔄 Gravar Nova Sessão";
+            statusText.innerText = "Análise Pronta! Altere o filtro abaixo.";
             statusText.style.color = "green";
             
             if (serieTemporal.length === 0) return alert("Nenhum rosto detectado!");
 
             gerarGrafico();
             chartContainer.style.display = "block";
-            btnDownloadCSV.style.display = "block";
             
-            // Rolar a tela para baixo automaticamente para ver o gráfico
             setTimeout(() => {
                 chartContainer.scrollIntoView({ behavior: 'smooth', block: 'end' });
             }, 300);
         });
 
         // ==========================================
-        // LÓGICA DO GRÁFICO (CHART.JS)
+        // LÓGICA DO GRÁFICO DINÂMICO
         // ==========================================
         function gerarGrafico() {
             const ctx = document.getElementById('meuGrafico').getContext('2d');
             
-            const labelsTempo = serieTemporal.map(item => item.tempo_segundos);
-            const dadosAbertura = serieTemporal.map(item => item.abertura);
+            // Pega o valor atual do menu suspenso (ex: "boca", "olho_esq")
+            const filtroEscolhido = seletorMetrica.value;
+            const nomeFiltro = seletorMetrica.options[seletorMetrica.selectedIndex].text;
 
-            if (meuGrafico) meuGrafico.destroy();
+            const labelsTempo = serieTemporal.map(item => item.tempo_segundos);
+            
+            // Mapeia os dados do eixo Y de acordo com a escolha do usuário
+            const dadosEixoY = serieTemporal.map(item => item[filtroEscolhido]);
+
+            if (meuGrafico) meuGrafico.destroy(); // Apaga o gráfico anterior para desenhar o novo
+
+            // Define uma cor dependendo do filtro para ficar visualmente agradável
+            let corLinha = '#007bff'; // Azul padrão (Boca)
+            if(filtroEscolhido.includes('olho')) corLinha = '#28a745'; // Verde para olhos
+            if(filtroEscolhido === 'sobrancelha') corLinha = '#6f42c1'; // Roxo para sobrancelha
 
             meuGrafico = new Chart(ctx, {
                 type: 'line',
                 data: {
                     labels: labelsTempo,
                     datasets: [{
-                        label: 'Distância',
-                        data: dadosAbertura,
-                        borderColor: '#007bff',
-                        backgroundColor: 'rgba(0, 123, 255, 0.2)',
+                        label: nomeFiltro,
+                        data: dadosEixoY,
+                        borderColor: corLinha,
+                        backgroundColor: corLinha + '33', // Adiciona transparência à cor base
                         borderWidth: 2,
                         pointRadius: 0, 
                         fill: true,
@@ -253,13 +289,13 @@
                     responsive: true,
                     scales: {
                         x: { title: { display: true, text: 'Tempo (s)' } },
-                        y: { title: { display: true, text: 'Distância (normalizada)' }, beginAtZero: true }
+                        y: { title: { display: true, text: 'Distância' }, beginAtZero: false }
                     }
                 }
             });
         }
 
-        // 6. Download CSV
+        // 6. Download CSV OBRIGATÓRIO (Com todos os 468 pontos)
         btnDownloadCSV.addEventListener('click', () => {
             let csvContent = "Tempo_Decorrido(s)";
             for (let i = 0; i < 468; i++) {
@@ -268,14 +304,15 @@
             csvContent += "\n";
 
             serieTemporal.forEach(linha => {
-                csvContent += `${linha.tempo_segundos},${linha.dados.join(',')}\n`;
+                // Aqui usamos o .dadosCSV que guardou os 468 pontos intactos!
+                csvContent += `${linha.tempo_segundos},${linha.dadosCSV.join(',')}\n`;
             });
 
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement("a");
             const url = URL.createObjectURL(blob);
             link.setAttribute("href", url);
-            link.setAttribute("download", `analise_facial.csv`);
+            link.setAttribute("download", `analise_facial_completa.csv`);
             link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();
