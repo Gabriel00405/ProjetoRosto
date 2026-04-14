@@ -3,50 +3,88 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Análise Facial - Série Temporal</title>
+    <title>Análise Facial Pro - 468 Pontos</title>
     <style>
         body { font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto; }
-        video { width: 100%; border: 2px solid #ccc; border-radius: 8px; margin-top: 10px; }
-        button { padding: 10px 20px; font-size: 16px; margin-top: 10px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 5px;}
+        
+        .video-container {
+            position: relative;
+            width: 100%;
+            margin-top: 10px;
+            border: 2px solid #ccc;
+            border-radius: 8px;
+            overflow: hidden;
+            background-color: #000;
+        }
+        
+        video {
+            width: 100%;
+            display: block;
+        }
+        
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; 
+        }
+
+        .botoes-container { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+        button { padding: 10px 20px; font-size: 14px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 5px;}
         button:disabled { background: #ccc; cursor: not-allowed; }
+        #btnToggleMask { background: #28a745; display: none; }
         #status { margin-top: 10px; font-weight: bold; color: #d9534f; }
         #logErro { font-size: 12px; color: red; margin-top: 5px; }
     </style>
 </head>
 <body>
 
-    <h2>Extrator de Movimento Facial</h2>
-    <p>1. Aguarde a IA carregar.<br>2. Envie um vídeo do rosto.<br>3. O CSV será baixado automaticamente no final.</p>
+    <h2>Extrator de Movimento (468 Pontos)</h2>
+    <p>Todos os marcadores faciais serão extraídos (X, Y, Z).</p>
 
     <input type="file" id="videoUpload" accept="video/mp4,video/x-m4v,video/*" disabled>
     <div id="status">Carregando modelo de IA (MediaPipe)... aguarde.</div>
     <div id="logErro"></div>
     
-    <video id="videoElement" controls playsinline></video>
-    <button id="btnDownload" style="display: none;">Baixar CSV (Série Temporal)</button>
+    <div class="video-container">
+        <video id="videoElement" controls playsinline></video>
+        <canvas id="canvasElement"></canvas>
+    </div>
+
+    <div class="botoes-container">
+        <button id="btnToggleMask">Ocultar Máscara</button>
+        <button id="btnDownload" style="display: none;">Baixar CSV (Todos os Pontos)</button>
+    </div>
 
     <script type="module">
-        
-        import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js";
+        import { FaceLandmarker, FilesetResolver, DrawingUtils } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js";
 
         const videoUpload = document.getElementById('videoUpload');
         const video = document.getElementById('videoElement');
+        const canvas = document.getElementById('canvasElement');
+        const canvasCtx = canvas.getContext('2d');
         const statusText = document.getElementById('status');
-        const logErro = document.getElementById('logErro');
         const btnDownload = document.getElementById('btnDownload');
+        const btnToggleMask = document.getElementById('btnToggleMask');
 
         let faceLandmarker;
+        let drawingUtils;
         let serieTemporal = []; 
         let processando = false;
+        let mostrarMascara = true; 
+        let ultimoTempoVideo = -1; // NOVA VARIÁVEL: Para rastrear o tempo do vídeo
+
+        btnToggleMask.addEventListener('click', () => {
+            mostrarMascara = !mostrarMascara;
+            btnToggleMask.innerText = mostrarMascara ? "Ocultar Máscara" : "Mostrar Máscara";
+            if(!mostrarMascara) canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
+        });
 
         async function carregarModelo() {
             try {
-                statusText.innerText = "Baixando arquivos da IA... (pode levar alguns segundos)";
-                
-                const vision = await FilesetResolver.forVisionTasks(
-                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
-                );
-                
+                const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
                 faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
                     baseOptions: {
                         modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
@@ -57,15 +95,13 @@
                     numFaces: 1
                 });
                 
-                statusText.innerText = "IA Carregada com Sucesso! Pode enviar seu vídeo.";
+                drawingUtils = new DrawingUtils(canvasCtx);
+                statusText.innerText = "IA Pronta! Envie seu vídeo.";
                 statusText.style.color = "green";
                 videoUpload.disabled = false;
-                logErro.innerText = ""; 
-                
             } catch (erro) {
-                console.error("Erro:", erro);
                 statusText.innerText = "Falha ao carregar a IA.";
-                logErro.innerText = "Erro: " + erro.message;
+                document.getElementById('logErro').innerText = "Erro: " + erro.message;
             }
         }
         carregarModelo();
@@ -73,60 +109,97 @@
         videoUpload.addEventListener('change', (event) => {
             const file = event.target.files[0];
             if (!file) return;
-            const url = URL.createObjectURL(file);
-            video.src = url;
+            video.src = URL.createObjectURL(file);
             serieTemporal = []; 
+            ultimoTempoVideo = -1; // Reseta o rastreador
             btnDownload.style.display = "none";
-            statusText.innerText = "Vídeo carregado. Dê play no vídeo para processar.";
+            btnToggleMask.style.display = "block";
+            statusText.innerText = "Vídeo carregado. Dê play para processar.";
             statusText.style.color = "blue";
         });
 
         video.addEventListener('play', () => {
             processando = true;
-            statusText.innerText = "Extraindo série temporal... aguarde o vídeo terminar.";
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            statusText.innerText = "Analisando 468 pontos... aguarde o vídeo terminar.";
             statusText.style.color = "#d9534f";
+
+            // Se o vídeo voltou do começo, limpamos os dados antigos para não duplicar no CSV
+            if (video.currentTime === 0) {
+                serieTemporal = [];
+            }
+
             processarFrame();
         });
 
         video.addEventListener('pause', () => { processando = false; });
         video.addEventListener('ended', () => { 
             processando = false; 
-            statusText.innerText = "Processamento concluído!";
+            statusText.innerText = "Extração concluída!";
             statusText.style.color = "green";
             btnDownload.style.display = "block"; 
         });
 
-        async function processarFrame() {
+        function processarFrame() {
             if (!processando) return;
 
-            const tempoAtualMs = video.currentTime * 1000;
-            const resultados = faceLandmarker.detectForVideo(video, tempoAtualMs);
+            // CORREÇÃO: Usamos o relógio do navegador que nunca volta para trás
+            const tempoParaIA = performance.now();
 
-            if (resultados.faceLandmarks && resultados.faceLandmarks.length > 0) {
-                const marcos = resultados.faceLandmarks[0];
-                serieTemporal.push({
-                    tempo_segundos: video.currentTime.toFixed(3),
-                    nariz_y: marcos[1].y.toFixed(5),
-                    labio_sup_y: marcos[13].y.toFixed(5),
-                    labio_inf_y: marcos[14].y.toFixed(5)
-                });
+            // Só tenta achar o rosto se o vídeo realmente andou um frame (evita congelamento)
+            if (video.currentTime !== ultimoTempoVideo) {
+                ultimoTempoVideo = video.currentTime;
+                
+                const resultados = faceLandmarker.detectForVideo(video, tempoParaIA);
+                canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
+
+                if (resultados.faceLandmarks && resultados.faceLandmarks.length > 0) {
+                    const marcos = resultados.faceLandmarks[0];
+
+                    if (mostrarMascara) {
+                        drawingUtils.drawConnectors(marcos, FaceLandmarker.FACE_LANDMARKS_TESSELATION, { color: "#C0C0C070", lineWidth: 1 });
+                        drawingUtils.drawConnectors(marcos, FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE, { color: "#FF3030" });
+                        drawingUtils.drawConnectors(marcos, FaceLandmarker.FACE_LANDMARKS_LEFT_EYE, { color: "#30FF30" });
+                        drawingUtils.drawConnectors(marcos, FaceLandmarker.FACE_LANDMARKS_LIPS, { color: "#E0E0E0" });
+                    }
+
+                    let coordenadasDoFrame = [];
+                    for (let i = 0; i < 468; i++) {
+                        coordenadasDoFrame.push(marcos[i].x.toFixed(5));
+                        coordenadasDoFrame.push(marcos[i].y.toFixed(5));
+                        coordenadasDoFrame.push(marcos[i].z.toFixed(5));
+                    }
+
+                    serieTemporal.push({
+                        // Continuamos salvando o tempo real do vídeo no CSV!
+                        tempo_segundos: video.currentTime.toFixed(3), 
+                        dados: coordenadasDoFrame 
+                    });
+                }
             }
+
             video.requestVideoFrameCallback(processarFrame);
         }
 
         btnDownload.addEventListener('click', () => {
             if (serieTemporal.length === 0) return alert("Nenhum dado coletado!");
 
-            let csvContent = "Tempo(s),Nariz_Y,Labio_Superior_Y,Labio_Inferior_Y\n";
+            let csvContent = "Tempo(s)";
+            for (let i = 0; i < 468; i++) {
+                csvContent += `,Pt${i}_X,Pt${i}_Y,Pt${i}_Z`;
+            }
+            csvContent += "\n";
+
             serieTemporal.forEach(linha => {
-                csvContent += `${linha.tempo_segundos},${linha.nariz_y},${linha.labio_sup_y},${linha.labio_inf_y}\n`;
+                csvContent += `${linha.tempo_segundos},${linha.dados.join(',')}\n`;
             });
 
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement("a");
             const url = URL.createObjectURL(blob);
             link.setAttribute("href", url);
-            link.setAttribute("download", "movimento_facial.csv");
+            link.setAttribute("download", "movimento_facial_468_pontos.csv");
             link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();
