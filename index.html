@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scanner Facial Mobile</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto; text-align: center; }
+        
+        /* Ajuste para a câmera do celular */
+        .video-container {
+            position: relative;
+            width: 100%;
+            max-width: 400px;
+            margin: 10px auto;
+            border: 3px solid #333;
+            border-radius: 12px;
+            overflow: hidden;
+            background-color: #000;
+            /* Proporção típica de celular em pé */
+            aspect-ratio: 3/4; 
+        }
+        
+        /* Espelhamento (mirror) para parecer um espelho normal */
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); 
+            display: block;
+        }
+        
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* O canvas também precisa ser espelhado */
+            pointer-events: none; 
+        }
+
+        .botoes-container { display: flex; flex-direction: column; gap: 10px; margin-top: 15px; }
+        button { padding: 15px; font-size: 16px; font-weight: bold; cursor: pointer; color: white; border: none; border-radius: 8px;}
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        
+        #btnStartCamera { background: #007bff; }
+        #btnRecord { background: #28a745; display: none; }
+        #btnStopAndDownload { background: #d9534f; display: none; }
+        
+        #status { margin-top: 10px; font-weight: bold; color: #d9534f; }
+        #contador { font-size: 18px; color: #28a745; font-weight: bold; margin-top: 5px; display: none; }
+    </style>
+</head>
+<body>
+
+    <h2>Análise Facial ao Vivo</h2>
+    
+    <div id="status">Carregando IA...</div>
+    <div id="contador">Dados coletados: 0 frames</div>
+    
+    <div class="video-container">
+        <video id="videoElement" autoplay playsinline></video>
+        <canvas id="canvasElement"></canvas>
+    </div>
+
+    <div class="botoes-container">
+        <button id="btnStartCamera" disabled>Ligar Câmera</button>
+        <button id="btnRecord">🔴 Iniciar Gravação de Dados</button>
+        <button id="btnStopAndDownload">⏹ Parar e Baixar CSV</button>
+    </div>
+
+    <script type="module">
+        import { FaceLandmarker, FilesetResolver, DrawingUtils } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js";
+
+        const video = document.getElementById('videoElement');
+        const canvas = document.getElementById('canvasElement');
+        const canvasCtx = canvas.getContext('2d');
+        const statusText = document.getElementById('status');
+        const contadorText = document.getElementById('contador');
+        
+        const btnStartCamera = document.getElementById('btnStartCamera');
+        const btnRecord = document.getElementById('btnRecord');
+        const btnStopAndDownload = document.getElementById('btnStopAndDownload');
+
+        let faceLandmarker;
+        let drawingUtils;
+        let serieTemporal = []; 
+        let isCameraAtiva = false;
+        let isGravando = false;
+        let lastVideoTime = -1;
+        let tempoInicioGravacao = 0;
+
+        // 1. Inicializa a IA
+        async function carregarModelo() {
+            try {
+                const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
+                faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+                        delegate: "CPU"
+                    },
+                    outputFaceBlendshapes: false,
+                    runningMode: "VIDEO", // Usamos modo de vídeo para processar os frames da câmera
+                    numFaces: 1
+                });
+                
+                drawingUtils = new DrawingUtils(canvasCtx);
+                statusText.innerText = "IA Pronta!";
+                statusText.style.color = "green";
+                btnStartCamera.disabled = false;
+            } catch (erro) {
+                statusText.innerText = "Erro na IA: " + erro.message;
+            }
+        }
+        carregarModelo();
+
+        // 2. Ligar a Câmera Frontal
+        btnStartCamera.addEventListener('click', async () => {
+            try {
+                // facingMode: "user" força a usar a câmera frontal no celular
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } } 
+                });
+                
+                video.srcObject = stream;
+                isCameraAtiva = true;
+                
+                video.addEventListener("loadeddata", () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    btnStartCamera.style.display = "none";
+                    btnRecord.style.display = "block";
+                    statusText.innerText = "Câmera Ativa. Posicione o rosto e grave.";
+                    processarCamera(); // Inicia o loop de detecção
+                });
+            } catch (err) {
+                statusText.innerText = "Erro ao acessar câmera. O site tem permissão?";
+                console.error(err);
+            }
+        });
+
+        // 3. Loop contínuo da Câmera
+        function processarCamera() {
+            if (!isCameraAtiva) return;
+
+            let startTimeMs = performance.now();
+            
+            // Só analisa se o vídeo gerou um frame novo
+            if (lastVideoTime !== video.currentTime) {
+                lastVideoTime = video.currentTime;
+                const resultados = faceLandmarker.detectForVideo(video, startTimeMs);
+
+                canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
+
+                if (resultados.faceLandmarks && resultados.faceLandmarks.length > 0) {
+                    const marcos = resultados.faceLandmarks[0];
+
+                    // Desenha a máscara
+                    drawingUtils.drawConnectors(marcos, FaceLandmarker.FACE_LANDMARKS_TESSELATION, { color: "#C0C0C070", lineWidth: 1 });
+                    drawingUtils.drawConnectors(marcos, FaceLandmarker.FACE_LANDMARKS_LIPS, { color: "#E0E0E0" });
+
+                    // Se o botão de gravar foi apertado, guarda os dados!
+                    if (isGravando) {
+                        let tempoAtual = (performance.now() - tempoInicioGravacao) / 1000; // Tempo em segundos desde que apertou Gravar
+                        
+                        let coordenadasDoFrame = [];
+                        for (let i = 0; i < 468; i++) {
+                            coordenadasDoFrame.push(marcos[i].x.toFixed(5));
+                            coordenadasDoFrame.push(marcos[i].y.toFixed(5));
+                            coordenadasDoFrame.push(marcos[i].z.toFixed(5));
+                        }
+
+                        serieTemporal.push({
+                            tempo_segundos: tempoAtual.toFixed(3),
+                            dados: coordenadasDoFrame
+                        });
+
+                        contadorText.innerText = `Dados coletados: ${serieTemporal.length} frames`;
+                    }
+                }
+            }
+
+            // Fica repetindo a função eternamente atrelada à taxa de atualização do monitor/câmera
+            window.requestAnimationFrame(processarCamera);
+        }
+
+        // 4. Controle de Gravação
+        btnRecord.addEventListener('click', () => {
+            serieTemporal = []; // Zera os dados
+            isGravando = true;
+            tempoInicioGravacao = performance.now();
+            
+            btnRecord.style.display = "none";
+            btnStopAndDownload.style.display = "block";
+            contadorText.style.display = "block";
+            statusText.innerText = "Gravando Movimentos...";
+            statusText.style.color = "red";
+        });
+
+        // 5. Parar e Baixar CSV
+        btnStopAndDownload.addEventListener('click', () => {
+            isGravando = false;
+            
+            btnStopAndDownload.style.display = "none";
+            btnRecord.style.display = "block";
+            btnRecord.innerText = "🔄 Gravar Nova Sessão";
+            statusText.innerText = "Gravação Finalizada!";
+            statusText.style.color = "green";
+
+            if (serieTemporal.length === 0) return alert("Nenhum rosto detectado durante a gravação!");
+
+            // Gera o CSV (O mesmo processo de antes)
+            let csvContent = "Tempo_Decorrido(s)";
+            for (let i = 0; i < 468; i++) {
+                csvContent += `,Pt${i}_X,Pt${i}_Y,Pt${i}_Z`;
+            }
+            csvContent += "\n";
+
+            serieTemporal.forEach(linha => {
+                csvContent += `${linha.tempo_segundos},${linha.dados.join(',')}\n`;
+            });
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", `analise_facial_${new Date().getTime()}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        });
+    </script>
+</body>
+</html>
