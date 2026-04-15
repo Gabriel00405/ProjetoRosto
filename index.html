@@ -16,11 +16,9 @@
             background-color: #000; aspect-ratio: 3/4;
         }
         
-        /* Removemos o espelhamento fixo daqui e criamos uma classe dinâmica */
         #videoElement, #canvasElement { width: 100%; height: 100%; object-fit: cover; display: block; }
         #canvasElement { position: absolute; top: 0; left: 0; pointer-events: none; }
         
-        /* Classe que o JS vai ligar apenas na câmera frontal */
         .espelhado { transform: scaleX(-1); }
 
         .botoes-container { display: flex; flex-direction: column; gap: 10px; margin-top: 15px; }
@@ -31,7 +29,7 @@
         button:disabled { background: #ccc !important; cursor: not-allowed; }
         
         #btnStartCamera { background: #007bff; }
-        #btnSwitchCamera { background: #17a2b8; display: none; } /* Novo botão de inverter */
+        #btnSwitchCamera { background: #17a2b8; display: none; } 
         #btnToggleMask { background: #6f42c1; display: none; } 
         #btnRecord { background: #28a745; display: none; }
         #btnStop { background: #d9534f; display: none; }
@@ -72,7 +70,7 @@
         
         <div class="botoes-linha">
             <button id="btnToggleMask">👁️ Máscara</button>
-            <button id="btnSwitchCamera">🔄 Inverter Câmera</button>
+            <button id="btnSwitchCamera">🔄 Inverter</button>
         </div>
 
         <button id="btnRecord">🔴 Iniciar Gravação</button>
@@ -123,15 +121,19 @@
         let meuGrafico = null; 
         
         let currentStream = null;
-        let tipoCamera = "user"; // "user" = Frontal | "environment" = Traseira
+        let tipoCamera = "user"; // "user" = Frontal, "environment" = Traseira
+        let animationFrameId = null; // Guarda o ID do loop da IA para podermos cancelar depois
 
+        // Troca de filtro do gráfico
         seletorMetrica.addEventListener('change', () => {
             if (serieTemporal.length > 0) gerarGrafico();
         });
 
+        // Ligar/Desligar Máscara
         btnToggleMask.addEventListener('click', () => {
             mostrarMascara = !mostrarMascara;
             btnToggleMask.style.opacity = mostrarMascara ? "1" : "0.5";
+            if (!mostrarMascara) canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
         });
 
         // 1. Inicializa a IA
@@ -158,21 +160,25 @@
         }
         carregarModelo();
 
-        // 2. Função para ligar/trocar a Câmera
+        // 2. Função para Ligar a Câmera
         async function iniciarCamera() {
-            // Se já tiver uma câmera ligada, desliga ela antes de trocar
+            // Passo de Segurança: Desliga completamente a câmera e o loop antigo antes de trocar
+            if (animationFrameId) {
+                window.cancelAnimationFrame(animationFrameId);
+            }
             if (currentStream) {
                 currentStream.getTracks().forEach(track => track.stop());
             }
 
             try {
+                // Tenta puxar a câmera escolhida
                 currentStream = await navigator.mediaDevices.getUserMedia({ 
                     video: { facingMode: tipoCamera, width: { ideal: 640 }, height: { ideal: 480 } } 
                 });
                 video.srcObject = currentStream;
                 isCameraAtiva = true;
 
-                // Aplica o "efeito espelho" APENAS na câmera frontal
+                // Aplica o "efeito espelho" APENAS se for a câmera frontal
                 if (tipoCamera === "user") {
                     video.classList.add("espelhado");
                     canvas.classList.add("espelhado");
@@ -181,30 +187,36 @@
                     canvas.classList.remove("espelhado");
                 }
                 
-                video.addEventListener("loadeddata", () => {
+                // Só começa a processar a IA quando a nova câmera realmente aparecer na tela
+                video.onloadeddata = () => {
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
                     
                     btnStartCamera.style.display = "none";
                     btnSwitchCamera.style.display = "block"; 
+                    btnSwitchCamera.disabled = false; // Libera o botão novamente
                     btnToggleMask.style.display = "block"; 
                     btnRecord.style.display = "block";
                     
                     statusText.innerText = tipoCamera === "user" ? "Câmera Frontal Ativa." : "Câmera Traseira Ativa.";
-                    processarCamera();
-                });
+                    
+                    lastVideoTime = -1; // Zera o tempo interno
+                    processarCamera(); // Inicia o loop da nova câmera de forma segura
+                };
             } catch (err) {
                 statusText.innerText = "Erro ao acessar câmera: " + err.message;
+                btnSwitchCamera.disabled = false;
             }
         }
 
+        // Botões de Câmera
         btnStartCamera.addEventListener('click', iniciarCamera);
 
-        // Botão de Inverter a Câmera
         btnSwitchCamera.addEventListener('click', () => {
-            // Troca o tipo e chama a função de ligar a câmera novamente
+            btnSwitchCamera.disabled = true; // Trava o botão para não dar cliques duplos
+            statusText.innerText = "Trocando câmera... Aguarde.";
+            isCameraAtiva = false; // Para o loop na hora
             tipoCamera = tipoCamera === "user" ? "environment" : "user";
-            statusText.innerText = "Trocando câmera...";
             iniciarCamera();
         });
 
@@ -254,7 +266,8 @@
                     }
                 }
             }
-            window.requestAnimationFrame(processarCamera);
+            // Guarda a "identidade" do loop na variável para podermos cancelar caso o usuário troque de câmera
+            animationFrameId = window.requestAnimationFrame(processarCamera);
         }
 
         // 4. Iniciar Gravação
@@ -267,7 +280,7 @@
             btnRecord.style.display = "none";
             btnStop.style.display = "block";
             
-            // Desativa a troca de câmera durante a gravação para não bugar os dados
+            // Trava a troca de câmera durante a gravação para não estragar a série temporal
             btnSwitchCamera.disabled = true; 
             
             contadorText.style.display = "block";
@@ -281,7 +294,9 @@
             btnStop.style.display = "none";
             btnRecord.style.display = "block";
             btnRecord.innerText = "🔄 Gravar Nova Sessão";
-            btnSwitchCamera.disabled = false; // Libera a troca de câmera
+            
+            // Libera a câmera novamente
+            btnSwitchCamera.disabled = false; 
             
             statusText.innerText = "Análise Pronta! Altere o filtro abaixo.";
             statusText.style.color = "green";
@@ -296,7 +311,7 @@
             }, 300);
         });
 
-        // LÓGICA DO GRÁFICO DINÂMICO
+        // 6. Lógica do Gráfico
         function gerarGrafico() {
             const ctx = document.getElementById('meuGrafico').getContext('2d');
             
@@ -337,7 +352,7 @@
             });
         }
 
-        // 6. Download CSV
+        // 7. Download CSV
         btnDownloadCSV.addEventListener('click', () => {
             let csvContent = "Tempo_Decorrido(s)";
             for (let i = 0; i < 468; i++) {
