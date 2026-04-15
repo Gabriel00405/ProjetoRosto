@@ -16,14 +16,22 @@
             background-color: #000; aspect-ratio: 3/4;
         }
         
-        #videoElement, #canvasElement { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: block; }
+        /* Removemos o espelhamento fixo daqui e criamos uma classe dinâmica */
+        #videoElement, #canvasElement { width: 100%; height: 100%; object-fit: cover; display: block; }
         #canvasElement { position: absolute; top: 0; left: 0; pointer-events: none; }
+        
+        /* Classe que o JS vai ligar apenas na câmera frontal */
+        .espelhado { transform: scaleX(-1); }
 
         .botoes-container { display: flex; flex-direction: column; gap: 10px; margin-top: 15px; }
+        .botoes-linha { display: flex; gap: 10px; width: 100%; }
+        .botoes-linha button { flex: 1; }
+        
         button { padding: 15px; font-size: 16px; font-weight: bold; cursor: pointer; color: white; border: none; border-radius: 8px;}
-        button:disabled { background: #ccc; cursor: not-allowed; }
+        button:disabled { background: #ccc !important; cursor: not-allowed; }
         
         #btnStartCamera { background: #007bff; }
+        #btnSwitchCamera { background: #17a2b8; display: none; } /* Novo botão de inverter */
         #btnToggleMask { background: #6f42c1; display: none; } 
         #btnRecord { background: #28a745; display: none; }
         #btnStop { background: #d9534f; display: none; }
@@ -32,12 +40,11 @@
         #status { margin-top: 10px; font-weight: bold; color: #d9534f; }
         #contador { font-size: 16px; color: #28a745; font-weight: bold; margin-top: 5px; display: none; }
         
-        /* Estilos do Container do Gráfico e Seletor */
         .chart-container {
             width: 100%; max-width: 400px; margin: 20px auto 40px auto;
             background: white; padding: 15px; border-radius: 12px;
             box-shadow: 0px 4px 10px rgba(0,0,0,0.1);
-            display: none; /* Escondido até terminar a gravação */
+            display: none; 
             box-sizing: border-box;
         }
         
@@ -62,13 +69,17 @@
 
     <div class="botoes-container">
         <button id="btnStartCamera" disabled>Ligar Câmera</button>
-        <button id="btnToggleMask">👁️ Ocultar Máscara</button>
+        
+        <div class="botoes-linha">
+            <button id="btnToggleMask">👁️ Máscara</button>
+            <button id="btnSwitchCamera">🔄 Inverter Câmera</button>
+        </div>
+
         <button id="btnRecord">🔴 Iniciar Gravação</button>
         <button id="btnStop">⏹ Parar e Ver Resultados</button>
     </div>
 
     <div class="chart-container" id="chartContainer">
-        
         <div class="seletor-box">
             <label for="seletorMetrica">Visualizar movimento de:</label>
             <select id="seletorMetrica">
@@ -78,9 +89,8 @@
                 <option value="sobrancelha">Elevação - Sobrancelha Esq.</option>
             </select>
         </div>
-
         <canvas id="meuGrafico"></canvas>
-        <button id="btnDownloadCSV" style="width: 100%;">Baixar CSV (Todos os 468 Pontos)</button>
+        <button id="btnDownloadCSV" style="width: 100%;">Baixar CSV Completo</button>
     </div>
 
     <script type="module">
@@ -93,6 +103,7 @@
         const contadorText = document.getElementById('contador');
         
         const btnStartCamera = document.getElementById('btnStartCamera');
+        const btnSwitchCamera = document.getElementById('btnSwitchCamera');
         const btnToggleMask = document.getElementById('btnToggleMask');
         const btnRecord = document.getElementById('btnRecord');
         const btnStop = document.getElementById('btnStop');
@@ -110,15 +121,17 @@
         let lastVideoTime = -1;
         let tempoInicioGravacao = 0;
         let meuGrafico = null; 
+        
+        let currentStream = null;
+        let tipoCamera = "user"; // "user" = Frontal | "environment" = Traseira
 
-        // 0. Atualizar o gráfico se o usuário mudar o menu suspendo
         seletorMetrica.addEventListener('change', () => {
             if (serieTemporal.length > 0) gerarGrafico();
         });
 
         btnToggleMask.addEventListener('click', () => {
             mostrarMascara = !mostrarMascara;
-            btnToggleMask.innerText = mostrarMascara ? "👁️ Ocultar Máscara" : "👁️ Mostrar Máscara";
+            btnToggleMask.style.opacity = mostrarMascara ? "1" : "0.5";
         });
 
         // 1. Inicializa a IA
@@ -145,23 +158,54 @@
         }
         carregarModelo();
 
-        // 2. Ligar a Câmera
-        btnStartCamera.addEventListener('click', async () => {
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } } 
-            });
-            video.srcObject = stream;
-            isCameraAtiva = true;
-            
-            video.addEventListener("loadeddata", () => {
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                btnStartCamera.style.display = "none";
-                btnToggleMask.style.display = "block"; 
-                btnRecord.style.display = "block";
-                statusText.innerText = "Câmera Ativa. Posicione o rosto e grave.";
-                processarCamera();
-            });
+        // 2. Função para ligar/trocar a Câmera
+        async function iniciarCamera() {
+            // Se já tiver uma câmera ligada, desliga ela antes de trocar
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+            }
+
+            try {
+                currentStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: tipoCamera, width: { ideal: 640 }, height: { ideal: 480 } } 
+                });
+                video.srcObject = currentStream;
+                isCameraAtiva = true;
+
+                // Aplica o "efeito espelho" APENAS na câmera frontal
+                if (tipoCamera === "user") {
+                    video.classList.add("espelhado");
+                    canvas.classList.add("espelhado");
+                } else {
+                    video.classList.remove("espelhado");
+                    canvas.classList.remove("espelhado");
+                }
+                
+                video.addEventListener("loadeddata", () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    
+                    btnStartCamera.style.display = "none";
+                    btnSwitchCamera.style.display = "block"; 
+                    btnToggleMask.style.display = "block"; 
+                    btnRecord.style.display = "block";
+                    
+                    statusText.innerText = tipoCamera === "user" ? "Câmera Frontal Ativa." : "Câmera Traseira Ativa.";
+                    processarCamera();
+                });
+            } catch (err) {
+                statusText.innerText = "Erro ao acessar câmera: " + err.message;
+            }
+        }
+
+        btnStartCamera.addEventListener('click', iniciarCamera);
+
+        // Botão de Inverter a Câmera
+        btnSwitchCamera.addEventListener('click', () => {
+            // Troca o tipo e chama a função de ligar a câmera novamente
+            tipoCamera = tipoCamera === "user" ? "environment" : "user";
+            statusText.innerText = "Trocando câmera...";
+            iniciarCamera();
         });
 
         // 3. Loop contínuo da Câmera
@@ -185,7 +229,6 @@
                     if (isGravando) {
                         let tempoAtual = (performance.now() - tempoInicioGravacao) / 1000;
                         
-                        // Preparando os 468 pontos completos para o CSV
                         let coordenadasDoFrame = [];
                         for (let i = 0; i < 468; i++) {
                             coordenadasDoFrame.push(marcos[i].x.toFixed(5));
@@ -193,13 +236,11 @@
                             coordenadasDoFrame.push(marcos[i].z.toFixed(5));
                         }
 
-                        // Calculando as 4 métricas específicas em tempo real
-                        let metricaBoca = Math.abs(marcos[14].y - marcos[13].y); // Distância vertical boca
-                        let metricaOlhoEsq = Math.abs(marcos[159].y - marcos[145].y); // Distância vertical olho esq
-                        let metricaOlhoDir = Math.abs(marcos[386].y - marcos[374].y); // Distância vertical olho dir
-                        let metricaSobrancelha = Math.abs(marcos[70].y - marcos[159].y); // Distância sobrancelha pro olho
+                        let metricaBoca = Math.abs(marcos[14].y - marcos[13].y);
+                        let metricaOlhoEsq = Math.abs(marcos[159].y - marcos[145].y); 
+                        let metricaOlhoDir = Math.abs(marcos[386].y - marcos[374].y); 
+                        let metricaSobrancelha = Math.abs(marcos[70].y - marcos[159].y); 
 
-                        // Salvamos TUDO no nosso "banco de dados" temporário
                         serieTemporal.push({
                             tempo_segundos: tempoAtual.toFixed(3),
                             dadosCSV: coordenadasDoFrame,
@@ -221,9 +262,14 @@
             serieTemporal = []; 
             isGravando = true;
             tempoInicioGravacao = performance.now();
+            
             chartContainer.style.display = "none"; 
             btnRecord.style.display = "none";
             btnStop.style.display = "block";
+            
+            // Desativa a troca de câmera durante a gravação para não bugar os dados
+            btnSwitchCamera.disabled = true; 
+            
             contadorText.style.display = "block";
             statusText.innerText = "Gravando Movimentos...";
             statusText.style.color = "red";
@@ -235,6 +281,8 @@
             btnStop.style.display = "none";
             btnRecord.style.display = "block";
             btnRecord.innerText = "🔄 Gravar Nova Sessão";
+            btnSwitchCamera.disabled = false; // Libera a troca de câmera
+            
             statusText.innerText = "Análise Pronta! Altere o filtro abaixo.";
             statusText.style.color = "green";
             
@@ -248,27 +296,21 @@
             }, 300);
         });
 
-        // ==========================================
         // LÓGICA DO GRÁFICO DINÂMICO
-        // ==========================================
         function gerarGrafico() {
             const ctx = document.getElementById('meuGrafico').getContext('2d');
             
-            // Pega o valor atual do menu suspenso (ex: "boca", "olho_esq")
             const filtroEscolhido = seletorMetrica.value;
             const nomeFiltro = seletorMetrica.options[seletorMetrica.selectedIndex].text;
 
             const labelsTempo = serieTemporal.map(item => item.tempo_segundos);
-            
-            // Mapeia os dados do eixo Y de acordo com a escolha do usuário
             const dadosEixoY = serieTemporal.map(item => item[filtroEscolhido]);
 
-            if (meuGrafico) meuGrafico.destroy(); // Apaga o gráfico anterior para desenhar o novo
+            if (meuGrafico) meuGrafico.destroy(); 
 
-            // Define uma cor dependendo do filtro para ficar visualmente agradável
-            let corLinha = '#007bff'; // Azul padrão (Boca)
-            if(filtroEscolhido.includes('olho')) corLinha = '#28a745'; // Verde para olhos
-            if(filtroEscolhido === 'sobrancelha') corLinha = '#6f42c1'; // Roxo para sobrancelha
+            let corLinha = '#007bff'; 
+            if(filtroEscolhido.includes('olho')) corLinha = '#28a745'; 
+            if(filtroEscolhido === 'sobrancelha') corLinha = '#6f42c1'; 
 
             meuGrafico = new Chart(ctx, {
                 type: 'line',
@@ -278,7 +320,7 @@
                         label: nomeFiltro,
                         data: dadosEixoY,
                         borderColor: corLinha,
-                        backgroundColor: corLinha + '33', // Adiciona transparência à cor base
+                        backgroundColor: corLinha + '33', 
                         borderWidth: 2,
                         pointRadius: 0, 
                         fill: true,
@@ -295,7 +337,7 @@
             });
         }
 
-        // 6. Download CSV OBRIGATÓRIO (Com todos os 468 pontos)
+        // 6. Download CSV
         btnDownloadCSV.addEventListener('click', () => {
             let csvContent = "Tempo_Decorrido(s)";
             for (let i = 0; i < 468; i++) {
@@ -304,7 +346,6 @@
             csvContent += "\n";
 
             serieTemporal.forEach(linha => {
-                // Aqui usamos o .dadosCSV que guardou os 468 pontos intactos!
                 csvContent += `${linha.tempo_segundos},${linha.dadosCSV.join(',')}\n`;
             });
 
