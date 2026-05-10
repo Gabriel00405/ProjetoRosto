@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Scanner Facial Mobile Pro</title>
+    <title>Scanner de Motricidade Facial (Protocolo Clínico)</title>
     
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
@@ -33,7 +33,11 @@
         #btnToggleMask { background: #6f42c1; display: none; } 
         #btnRecord { background: #28a745; display: none; }
         #btnStop { background: #d9534f; display: none; }
-        #btnDownloadCSV { background: #6c757d; margin-top: 15px; }
+        
+        /* Botões de Exportação Clínica */
+        .btn-export { margin-top: 10px; width: 100%; }
+        #btnDownloadRaw { background: #343a40; display: none; }
+        #btnDownloadAmp { background: #e0a800; display: none; color: #000;}
         
         #status { margin-top: 10px; font-weight: bold; color: #d9534f; }
         #contador { font-size: 16px; color: #28a745; font-weight: bold; margin-top: 5px; display: none; }
@@ -55,7 +59,7 @@
 </head>
 <body>
 
-    <h2>Análise Facial ao Vivo</h2>
+    <h2>Análise Clínica de Motricidade</h2>
     
     <div id="status">Carregando IA...</div>
     <div id="contador">Frames: 0</div>
@@ -74,7 +78,7 @@
         </div>
 
         <button id="btnRecord">🔴 Iniciar Gravação</button>
-        <button id="btnStop">⏹ Parar e Ver Resultados</button>
+        <button id="btnStop">⏹ Parar Avaliação</button>
     </div>
 
     <div class="chart-container" id="chartContainer">
@@ -88,7 +92,9 @@
             </select>
         </div>
         <canvas id="meuGrafico"></canvas>
-        <button id="btnDownloadCSV" style="width: 100%;">Baixar CSV Completo</button>
+        
+        <button id="btnDownloadRaw" class="btn-export">📥 Baixar Série Temporal (Dados Brutos)</button>
+        <button id="btnDownloadAmp" class="btn-export">📊 Baixar Amplitudes (Mapa de Tiques)</button>
     </div>
 
     <script type="module">
@@ -105,7 +111,8 @@
         const btnToggleMask = document.getElementById('btnToggleMask');
         const btnRecord = document.getElementById('btnRecord');
         const btnStop = document.getElementById('btnStop');
-        const btnDownloadCSV = document.getElementById('btnDownloadCSV');
+        const btnDownloadRaw = document.getElementById('btnDownloadRaw');
+        const btnDownloadAmp = document.getElementById('btnDownloadAmp');
         
         const chartContainer = document.getElementById('chartContainer');
         const seletorMetrica = document.getElementById('seletorMetrica');
@@ -118,18 +125,17 @@
         let mostrarMascara = true; 
         let lastVideoTime = -1;
         let tempoInicioGravacao = 0;
+        let frameIndex = 0; // Para espelhar a coluna 
         let meuGrafico = null; 
         
         let currentStream = null;
-        let tipoCamera = "user"; // "user" = Frontal, "environment" = Traseira
-        let animationFrameId = null; // Guarda o ID do loop da IA para podermos cancelar depois
+        let tipoCamera = "user"; 
+        let animationFrameId = null; 
 
-        // Troca de filtro do gráfico
         seletorMetrica.addEventListener('change', () => {
             if (serieTemporal.length > 0) gerarGrafico();
         });
 
-        // Ligar/Desligar Máscara
         btnToggleMask.addEventListener('click', () => {
             mostrarMascara = !mostrarMascara;
             btnToggleMask.style.opacity = mostrarMascara ? "1" : "0.5";
@@ -160,25 +166,18 @@
         }
         carregarModelo();
 
-        // 2. Função para Ligar a Câmera
+        // 2. Ligar a Câmera
         async function iniciarCamera() {
-            // Passo de Segurança: Desliga completamente a câmera e o loop antigo antes de trocar
-            if (animationFrameId) {
-                window.cancelAnimationFrame(animationFrameId);
-            }
-            if (currentStream) {
-                currentStream.getTracks().forEach(track => track.stop());
-            }
+            if (animationFrameId) window.cancelAnimationFrame(animationFrameId);
+            if (currentStream) currentStream.getTracks().forEach(track => track.stop());
 
             try {
-                // Tenta puxar a câmera escolhida
                 currentStream = await navigator.mediaDevices.getUserMedia({ 
                     video: { facingMode: tipoCamera, width: { ideal: 640 }, height: { ideal: 480 } } 
                 });
                 video.srcObject = currentStream;
                 isCameraAtiva = true;
 
-                // Aplica o "efeito espelho" APENAS se for a câmera frontal
                 if (tipoCamera === "user") {
                     video.classList.add("espelhado");
                     canvas.classList.add("espelhado");
@@ -187,40 +186,36 @@
                     canvas.classList.remove("espelhado");
                 }
                 
-                // Só começa a processar a IA quando a nova câmera realmente aparecer na tela
                 video.onloadeddata = () => {
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
                     
                     btnStartCamera.style.display = "none";
                     btnSwitchCamera.style.display = "block"; 
-                    btnSwitchCamera.disabled = false; // Libera o botão novamente
+                    btnSwitchCamera.disabled = false; 
                     btnToggleMask.style.display = "block"; 
                     btnRecord.style.display = "block";
                     
-                    statusText.innerText = tipoCamera === "user" ? "Câmera Frontal Ativa." : "Câmera Traseira Ativa.";
-                    
-                    lastVideoTime = -1; // Zera o tempo interno
-                    processarCamera(); // Inicia o loop da nova câmera de forma segura
+                    statusText.innerText = "Câmera Ativa. Pronto para avaliar.";
+                    lastVideoTime = -1; 
+                    processarCamera(); 
                 };
             } catch (err) {
-                statusText.innerText = "Erro ao acessar câmera: " + err.message;
+                statusText.innerText = "Erro ao acessar câmera.";
                 btnSwitchCamera.disabled = false;
             }
         }
 
-        // Botões de Câmera
         btnStartCamera.addEventListener('click', iniciarCamera);
 
         btnSwitchCamera.addEventListener('click', () => {
-            btnSwitchCamera.disabled = true; // Trava o botão para não dar cliques duplos
-            statusText.innerText = "Trocando câmera... Aguarde.";
-            isCameraAtiva = false; // Para o loop na hora
+            btnSwitchCamera.disabled = true; 
+            isCameraAtiva = false; 
             tipoCamera = tipoCamera === "user" ? "environment" : "user";
             iniciarCamera();
         });
 
-        // 3. Loop contínuo da Câmera
+        // 3. Loop contínuo da Câmera 
         function processarCamera() {
             if (!isCameraAtiva) return;
 
@@ -241,80 +236,84 @@
                     if (isGravando) {
                         let tempoAtual = (performance.now() - tempoInicioGravacao) / 1000;
                         
+                        // Salvamos os dados 100% crus do MediaPipe
                         let coordenadasDoFrame = [];
                         for (let i = 0; i < 468; i++) {
-                            coordenadasDoFrame.push(marcos[i].x.toFixed(5));
-                            coordenadasDoFrame.push(marcos[i].y.toFixed(5));
-                            coordenadasDoFrame.push(marcos[i].z.toFixed(5));
+                            coordenadasDoFrame.push(marcos[i].x.toFixed(6));
+                            coordenadasDoFrame.push(marcos[i].y.toFixed(6));
+                            coordenadasDoFrame.push(marcos[i].z.toFixed(6));
                         }
 
+                        // Métricas do gráfico 1D (Apenas visualização do app)
                         let metricaBoca = Math.abs(marcos[14].y - marcos[13].y);
                         let metricaOlhoEsq = Math.abs(marcos[159].y - marcos[145].y); 
                         let metricaOlhoDir = Math.abs(marcos[386].y - marcos[374].y); 
                         let metricaSobrancelha = Math.abs(marcos[70].y - marcos[159].y); 
 
                         serieTemporal.push({
+                            frame: frameIndex,
                             tempo_segundos: tempoAtual.toFixed(3),
-                            dadosCSV: coordenadasDoFrame,
+                            dadosRaw: coordenadasDoFrame,
                             boca: metricaBoca,
                             olho_esq: metricaOlhoEsq,
                             olho_dir: metricaOlhoDir,
                             sobrancelha: metricaSobrancelha
                         });
 
+                        frameIndex++;
                         contadorText.innerText = `Gravando... ${serieTemporal.length} frames`;
                     }
                 }
             }
-            // Guarda a "identidade" do loop na variável para podermos cancelar caso o usuário troque de câmera
             animationFrameId = window.requestAnimationFrame(processarCamera);
         }
 
-        // 4. Iniciar Gravação
+        // 4. Controles de Gravação
         btnRecord.addEventListener('click', () => {
             serieTemporal = []; 
+            frameIndex = 0;
             isGravando = true;
             tempoInicioGravacao = performance.now();
             
             chartContainer.style.display = "none"; 
             btnRecord.style.display = "none";
             btnStop.style.display = "block";
+            btnDownloadRaw.style.display = "none";
+            btnDownloadAmp.style.display = "none";
             
-            // Trava a troca de câmera durante a gravação para não estragar a série temporal
             btnSwitchCamera.disabled = true; 
             
             contadorText.style.display = "block";
-            statusText.innerText = "Gravando Movimentos...";
+            statusText.innerText = "Avaliando Motricidade...";
             statusText.style.color = "red";
         });
 
-        // 5. Parar Gravação e GERAR GRÁFICO
         btnStop.addEventListener('click', () => {
             isGravando = false;
             btnStop.style.display = "none";
             btnRecord.style.display = "block";
-            btnRecord.innerText = "🔄 Gravar Nova Sessão";
+            btnRecord.innerText = "🔄 Nova Avaliação";
             
-            // Libera a câmera novamente
             btnSwitchCamera.disabled = false; 
             
-            statusText.innerText = "Análise Pronta! Altere o filtro abaixo.";
+            statusText.innerText = "Avaliação Concluída! Exporte os dados.";
             statusText.style.color = "green";
             
             if (serieTemporal.length === 0) return alert("Nenhum rosto detectado!");
 
             gerarGrafico();
             chartContainer.style.display = "block";
+            btnDownloadRaw.style.display = "block";
+            btnDownloadAmp.style.display = "block";
             
             setTimeout(() => {
                 chartContainer.scrollIntoView({ behavior: 'smooth', block: 'end' });
             }, 300);
         });
 
-        // 6. Lógica do Gráfico
+        // 5. Gráfico Visual
         function gerarGrafico() {
             const ctx = document.getElementById('meuGrafico').getContext('2d');
-            
             const filtroEscolhido = seletorMetrica.value;
             const nomeFiltro = seletorMetrica.options[seletorMetrica.selectedIndex].text;
 
@@ -323,10 +322,6 @@
 
             if (meuGrafico) meuGrafico.destroy(); 
 
-            let corLinha = '#007bff'; 
-            if(filtroEscolhido.includes('olho')) corLinha = '#28a745'; 
-            if(filtroEscolhido === 'sobrancelha') corLinha = '#6f42c1'; 
-
             meuGrafico = new Chart(ctx, {
                 type: 'line',
                 data: {
@@ -334,46 +329,70 @@
                     datasets: [{
                         label: nomeFiltro,
                         data: dadosEixoY,
-                        borderColor: corLinha,
-                        backgroundColor: corLinha + '33', 
-                        borderWidth: 2,
-                        pointRadius: 0, 
-                        fill: true,
-                        tension: 0.4 
+                        borderColor: '#007bff',
+                        backgroundColor: '#007bff33', 
+                        borderWidth: 2, pointRadius: 0, fill: true, tension: 0.4 
                     }]
                 },
-                options: {
-                    responsive: true,
-                    scales: {
-                        x: { title: { display: true, text: 'Tempo (s)' } },
-                        y: { title: { display: true, text: 'Distância' }, beginAtZero: false }
-                    }
-                }
+                options: { responsive: true }
             });
         }
 
-        // 7. Download CSV
-        btnDownloadCSV.addEventListener('click', () => {
-            let csvContent = "Tempo_Decorrido(s)";
+        // Exportação 1: Raw Data Completo
+        btnDownloadRaw.addEventListener('click', () => {
+            let csvContent = "Frame,Tempo(s)";
             for (let i = 0; i < 468; i++) {
                 csvContent += `,Pt${i}_X,Pt${i}_Y,Pt${i}_Z`;
             }
             csvContent += "\n";
 
             serieTemporal.forEach(linha => {
-                csvContent += `${linha.tempo_segundos},${linha.dadosCSV.join(',')}\n`;
+                csvContent += `${linha.frame},${linha.tempo_segundos},${linha.dadosRaw.join(',')}\n`;
             });
 
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            baixarArquivo(csvContent, `dados_brutos_${Date.now()}.csv`);
+        });
+
+        // Exportação 2: Amplitudes de Deslocamento (Amplitudes_Facemesh)
+        btnDownloadAmp.addEventListener('click', () => {
+            let csvContent = "Ponto;X_medio;Y_medio;Amplitude_de_deslocamento\n";
+            
+            for (let ponto_id = 0; ponto_id < 468; ponto_id++) {
+                let xs = [];
+                let ys = [];
+                
+                // Extrai todos os X e Y daquele ponto específico ao longo de todos os frames
+                serieTemporal.forEach(frame => {
+                    xs.push(parseFloat(frame.dadosRaw[ponto_id * 3]));     // X
+                    ys.push(parseFloat(frame.dadosRaw[ponto_id * 3 + 1])); // Y
+                });
+
+                if (xs.length > 1) {
+                    let amp_x = Math.max(...xs) - Math.min(...xs);
+                    let amp_y = Math.max(...ys) - Math.min(...ys);
+                    let amplitude = Math.sqrt(Math.pow(amp_x, 2) + Math.pow(amp_y, 2));
+                    
+                    let x_medio = xs.reduce((a, b) => a + b, 0) / xs.length;
+                    let y_medio = ys.reduce((a, b) => a + b, 0) / ys.length;
+
+                    // Formato exato do seu código Python (separado por ponto e vírgula)
+                    csvContent += `${ponto_id};${x_medio.toFixed(6)};${y_medio.toFixed(6)};${amplitude.toFixed(6)}\n`;
+                }
+            }
+
+            baixarArquivo(csvContent, `amplitudes_facemesh_${Date.now()}.csv`, 'text/csv;charset=utf-8;');
+        });
+
+        function baixarArquivo(conteudo, nomeArquivo, tipo = 'text/csv;charset=utf-8;') {
+            const blob = new Blob([conteudo], { type: tipo });
             const link = document.createElement("a");
             const url = URL.createObjectURL(blob);
             link.setAttribute("href", url);
-            link.setAttribute("download", `analise_facial_completa.csv`);
-            link.style.visibility = 'hidden';
+            link.setAttribute("download", nomeArquivo);
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-        });
+        }
     </script>
 </body>
 </html>
